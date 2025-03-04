@@ -3294,6 +3294,7 @@ expected return value are as specified for `completion-in-region'."
           (eq 'file (completion-metadata-get metadata 'category)))
          (threshold (completion--cycle-threshold metadata))
          (all (completion-all-completions initial collection predicate (length initial)))
+         (pt (max 0 (- (point) start)))
          ;; Wrap all annotation functions to ensure that they are executed
          ;; in the original buffer.
          (exit-fun (plist-get completion-extra-properties :exit-function))
@@ -3310,18 +3311,19 @@ expected return value are as specified for `completion-in-region'."
                           (lambda (cand)
                             (concat (propertize " " 'display '(space :align-to center))
                                     (funcall docsig-fun cand)))))))))
-    ;; error if `threshold' is t or the improper list `all' is too short
     (if (and threshold
              (or (not (consp (ignore-errors (nthcdr threshold all))))
                  (and completion-cycling completion-all-sorted-completions)))
         (completion--in-region start end collection predicate)
-      (let* ((this-command #'consult-completion-in-region)
-             (completion
-              (cond
-               ((atom all) nil)
-               ((and (consp all) (atom (cdr all)))
-                (concat (substring initial 0 (cdr all)) (car all)))
-               (t
+      (pcase (completion-all-completions initial collection predicate pt metadata)
+        ('nil (message "No match") nil)
+        (`(,completion)
+         (completion--replace start end completion)
+         (message "Sole match")
+         (when exit-fun (funcall exit-fun completion 'exact))
+         t)
+        (_
+         (let ((completion
                 (consult--local-let ((enable-recursive-minibuffers t))
                   ;; Evaluate completion table in the original buffer.
                   ;; This is a reasonable thing to do and required by
@@ -3339,21 +3341,14 @@ expected return value are as specified for `completion-in-region'."
                              "Complete: ")
                    :state (consult--insertion-preview start end)
                    :predicate predicate
-                   :initial initial))))))
-        (if completion
-            (progn
-              ;; bug#55205: completion--replace removes properties!
-              (completion--replace start end (setq completion (concat completion)))
-              (when exit-fun
-                (funcall exit-fun completion
-                         ;; If completion is finished and cannot be further
-                         ;; completed, return `finished'.  Otherwise return
-                         ;; `exact'.
-                         (if (eq (try-completion completion collection predicate) t)
-                             'finished 'exact)))
-              t)
-          (message "No completion")
-          nil)))))
+                   :initial initial))))
+           (if (try-completion completion collection predicate)
+               (progn
+                 (completion--replace start end (setq completion (concat completion)))
+                 (when exit-fun (funcall exit-fun completion 'finished))
+                 t)
+             (message "No match")
+             nil)))))))
 
 ;;;###autoload
 (defun consult-completion-in-region (start end collection predicate)
